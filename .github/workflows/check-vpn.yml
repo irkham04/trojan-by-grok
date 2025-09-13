@@ -1,0 +1,62 @@
+name: Check Trojan VPN Status
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  vpn-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          sudo apt-get update
+          sudo apt-get install -y unzip curl
+
+      - name: Install Trojan-Go
+        run: |
+          wget https://github.com/p4gefau1t/trojan-go/releases/download/v0.10.6/trojan-go-linux-amd64.zip
+          unzip trojan-go-linux-amd64.zip
+          chmod +x trojan-go
+
+      - name: Run VPN Check Script
+        run: |
+          echo "Running check for configs in input.txt..."
+          python check_vpn.py
+
+      - name: Commit output.txt to repo
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add output.txt vpn_report.txt
+          git commit -m "Update output.txt with valid Trojan URLs" || echo "No changes to commit"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpn-report
+          path: |
+            vpn_report.txt
+            output.txt
+
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill trojan-go || true
+          rm -f trojan-go* config_*.json
