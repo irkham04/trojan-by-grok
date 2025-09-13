@@ -19,35 +19,54 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
           sudo apt-get update
           sudo apt-get install -y unzip curl
+          echo "System dependencies installed"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip cache purge
+          pip install -r requirements.txt || { echo "Failed to install Python dependencies"; exit 1; }
+          echo "Python dependencies installed"
 
       - name: Install Trojan-Go
         run: |
-          wget https://github.com/p4gefau1t/trojan-go/releases/download/v0.10.6/trojan-go-linux-amd64.zip
-          unzip trojan-go-linux-amd64.zip
+          wget https://github.com/p4gefau1t/trojan-go/releases/download/v0.10.6/trojan-go-linux-amd64.zip || { echo "Failed to download Trojan-Go"; exit 1; }
+          unzip trojan-go-linux-amd64.zip || { echo "Failed to unzip Trojan-Go"; exit 1; }
           chmod +x trojan-go
+          echo "Trojan-Go installed"
 
       - name: Run VPN Check Script
         run: |
-          echo "Running check for configs in input.txt..."
-          python check_vpn.py
+          # Ambil IP asli
+          ORIGINAL_IP=$(curl -s https://api.ipify.org) || { echo "Failed to get original IP"; exit 1; }
+          echo "Original IP: $ORIGINAL_IP"
+          echo "ORIGINAL_IP=$ORIGINAL_IP" >> $GITHUB_ENV
+          # Log input.txt
+          echo "Input URLs:"
+          cat input.txt
+          python check_vpn.py || { echo "Script failed"; exit 1; }
+          echo "Check completed"
+          # Log output preview
+          echo "Valid URIs preview:"
+          head -5 output.txt || echo "No valid URIs"
 
       - name: Commit output.txt to repo
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
+          git pull --rebase origin main || { echo "Failed to pull and rebase"; exit 1; }
           git add output.txt vpn_report.txt
-          git commit -m "Update output.txt with valid Trojan URLs" || echo "No changes to commit"
-          git push
+          git commit -m "Update output.txt with valid Trojan URIs" || echo "No changes to commit"
+          git push || { echo "Failed to push to repo"; exit 1; }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Report Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: vpn-report
@@ -58,5 +77,6 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          pkill trojan-go || true
+          pkill -f trojan-go || true
           rm -f trojan-go* config_*.json
+          echo "Cleanup completed"
