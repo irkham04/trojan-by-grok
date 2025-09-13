@@ -10,14 +10,25 @@ import os
 import subprocess
 import time
 import urllib.parse
+import socket
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
+
+def check_port(port=1080):
+    """Cek apakah port tersedia."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except socket.error:
+            print(f"Port {port} sudah digunakan.")
+            return False
 
 def fetch_trojan_uris_from_url(input_url):
     """Fetch file dari URL, decode setiap baris base64 ke Trojan URI."""
     print(f"Fetching Trojan list dari: {input_url}")
     try:
-        response = requests.get(input_url, timeout=10)
+        response = requests.get(input_url, timeout=15)
         response.raise_for_status()
         lines = response.text.strip().split('\n')
         uris = []
@@ -29,10 +40,12 @@ def fetch_trojan_uris_from_url(input_url):
                     if decoded.startswith('trojan://'):
                         uris.append(decoded)
                         print(f"Decoded URI: {decoded[:50]}...")
+                    else:
+                        print(f"Skip non-Trojan URI: {decoded[:50]}...")
                 except Exception as e:
                     print(f"Skip invalid base64 line: {e}")
         print(f"Total URIs fetched: {len(uris)}")
-        return uris[:50]  # Batasi 50 untuk hindari timeout; sesuaikan jika perlu
+        return uris[:20]  # Batasi 20 untuk debug cepat
     except Exception as e:
         print(f"Error fetching/parsing {input_url}: {e}")
         return []
@@ -42,6 +55,7 @@ def parse_trojan_uri_to_config(uri):
     try:
         parsed = urlparse(uri)
         if parsed.scheme != 'trojan':
+            print(f"Invalid scheme in URI: {uri[:50]}...")
             return None
         password = parsed.username or ''
         server = parsed.hostname or ''
@@ -57,9 +71,11 @@ def parse_trojan_uri_to_config(uri):
             "remote_port": port,
             "password": [password],
             "ssl": {
-                "sni": sni
+                "sni": sni,
+                "verify": True
             }
         }
+        print(f"Parsed config: server={server}, port={port}, sni={sni}")
         return config
     except Exception as e:
         print(f"Error parsing URI {uri[:50]}...: {e}")
@@ -70,7 +86,7 @@ def get_public_ip(proxy=None):
     print(f"Getting IP with proxy: {proxy if proxy else 'None'}")
     try:
         proxies = {'http': proxy, 'https': proxy} if proxy else None
-        response = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=10)
+        response = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=15)
         ip = response.json()['ip']
         print(f"Got IP: {ip}")
         return ip
@@ -85,6 +101,11 @@ def test_trojan_config(config, uri, index):
     
     print(f"\n=== Testing Akun {index+1}: {server}:{port} ===")
     
+    # Cek port
+    if not check_port(1080):
+        print("Port 1080 tidak tersedia, skip akun.")
+        return False
+    
     # Simpan config sementara
     config_file = f'config_{index}.json'
     with open(config_file, 'w') as f:
@@ -92,11 +113,18 @@ def test_trojan_config(config, uri, index):
     
     proc = None
     try:
+        # Cek config dulu
+        result = subprocess.run(['./trojan-go', '-config', config_file], 
+                               capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            print(f"Config check failed: {result.stderr}")
+            return False
+        
         # Jalankan Trojan-Go di background
         proc = subprocess.Popen(['./trojan-go', '-config', config_file], 
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
-                                text=True, preexec_fn=os.setsid)  # Untuk kill group
-        time.sleep(5)  # Tunggu startup
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                               text=True, preexec_fn=os.setsid)
+        time.sleep(10)  # Tunggu lebih lama untuk koneksi
         
         # Cek apakah running
         if proc.poll() is not None:
@@ -115,12 +143,15 @@ def test_trojan_config(config, uri, index):
         print("✅ IP berubah. Akun valid!")
         return True
     
+    except subprocess.TimeoutExpired:
+        print("Trojan-Go timeout during config check.")
+        return False
     except Exception as e:
         print(f"Error testing Trojan: {e}")
         return False
     finally:
         if proc:
-            os.killpg(os.getpgid(proc.pid), 15) if os.name != 'nt' else proc.terminate()  # Kill process group
+            os.killpg(os.getpgid(proc.pid), 15) if os.name != 'nt' else proc.terminate()
             time.sleep(2)
         if os.path.exists(config_file):
             os.remove(config_file)
@@ -133,7 +164,7 @@ def main():
     print(f"Original IP (no VPN): {original_ip}")
     os.environ['ORIGINAL_IP'] = original_ip
     
-    # Baca input.txt (URL ke daftar URIs)
+    # Baca input.txt
     try:
         with open('input.txt', 'r') as f:
             input_urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
@@ -154,7 +185,7 @@ def main():
                 if test_trojan_config(config, uri, len(valid_uris) + i):
                     valid_uris.append(uri)
     
-    # Simpan output (URI valid, satu per baris)
+    # Simpan output
     with open('output.txt', 'w') as f:
         for uri in valid_uris:
             f.write(f"{uri}\n")
