@@ -1,1 +1,2 @@
 https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Splitted-By-Protocol/trojan.txt
+https://raw.githubusercontent.com/freefq/free/master/v2
