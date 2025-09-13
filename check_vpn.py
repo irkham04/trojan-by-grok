@@ -14,15 +14,18 @@ import socket
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
-def check_port(port=1080):
-    """Cek apakah port tersedia."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("127.0.0.1", port))
-            return True
-        except socket.error:
-            print(f"Port {port} sudah digunakan.")
-            return False
+def find_free_port(start_port=1080):
+    """Cari port bebas mulai dari start_port."""
+    port = start_port
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except socket.error:
+                port += 1
+                if port > start_port + 100:
+                    raise Exception("Tidak bisa menemukan port bebas.")
 
 def fetch_trojan_uris_from_url(input_url):
     """Fetch file dari URL, decode setiap baris base64 ke Trojan URI."""
@@ -32,25 +35,25 @@ def fetch_trojan_uris_from_url(input_url):
         response.raise_for_status()
         lines = response.text.strip().split('\n')
         uris = []
-        for line in lines:
+        for i, line in enumerate(lines):
             line = line.strip()
             if line:
                 try:
                     decoded = base64.b64decode(line).decode('utf-8')
                     if decoded.startswith('trojan://'):
                         uris.append(decoded)
-                        print(f"Decoded URI: {decoded[:50]}...")
+                        print(f"Line {i+1}: Decoded URI: {decoded[:50]}...")
                     else:
-                        print(f"Skip non-Trojan URI: {decoded[:50]}...")
+                        print(f"Line {i+1}: Skip non-Trojan URI: {decoded[:50]}...")
                 except Exception as e:
-                    print(f"Skip invalid base64 line: {e}")
+                    print(f"Line {i+1}: Skip invalid base64: {e}")
         print(f"Total URIs fetched: {len(uris)}")
-        return uris[:20]  # Batasi 20 untuk debug cepat
+        return uris[:20]  # Batasi 20 untuk debug
     except Exception as e:
         print(f"Error fetching/parsing {input_url}: {e}")
         return []
 
-def parse_trojan_uri_to_config(uri):
+def parse_trojan_uri_to_config(uri, port=1080):
     """Parse Trojan URI ke dict config untuk Trojan-Go."""
     try:
         parsed = urlparse(uri)
@@ -59,23 +62,23 @@ def parse_trojan_uri_to_config(uri):
             return None
         password = parsed.username or ''
         server = parsed.hostname or ''
-        port = parsed.port or 443
+        port_remote = parsed.port or 443
         query = parse_qs(parsed.query)
         sni = query.get('sni', [server])[0]
         
         config = {
             "run_type": "client",
             "local_addr": "127.0.0.1",
-            "local_port": 1080,
+            "local_port": port,
             "remote_addr": server,
-            "remote_port": port,
+            "remote_port": port_remote,
             "password": [password],
             "ssl": {
                 "sni": sni,
                 "verify": True
             }
         }
-        print(f"Parsed config: server={server}, port={port}, sni={sni}")
+        print(f"Parsed config: server={server}, port={port_remote}, sni={sni}, local_port={port}")
         return config
     except Exception as e:
         print(f"Error parsing URI {uri[:50]}...: {e}")
@@ -98,13 +101,9 @@ def test_trojan_config(config, uri, index):
     """Test satu config Trojan, return True jika valid."""
     server = config.get('remote_addr', 'N/A')
     port = config.get('remote_port', 'N/A')
+    local_port = config.get('local_port', 1080)
     
     print(f"\n=== Testing Akun {index+1}: {server}:{port} ===")
-    
-    # Cek port
-    if not check_port(1080):
-        print("Port 1080 tidak tersedia, skip akun.")
-        return False
     
     # Simpan config sementara
     config_file = f'config_{index}.json'
@@ -115,7 +114,7 @@ def test_trojan_config(config, uri, index):
     try:
         # Cek config dulu
         result = subprocess.run(['./trojan-go', '-config', config_file], 
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             print(f"Config check failed: {result.stderr}")
             return False
@@ -124,7 +123,7 @@ def test_trojan_config(config, uri, index):
         proc = subprocess.Popen(['./trojan-go', '-config', config_file], 
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
                                text=True, preexec_fn=os.setsid)
-        time.sleep(10)  # Tunggu lebih lama untuk koneksi
+        time.sleep(10)  # Tunggu lebih lama
         
         # Cek apakah running
         if proc.poll() is not None:
@@ -133,7 +132,7 @@ def test_trojan_config(config, uri, index):
             return False
         
         # Set proxy
-        proxy = 'socks5://127.0.0.1:1080'
+        proxy = f'socks5://127.0.0.1:{local_port}'
         current_ip = get_public_ip(proxy)
         
         if current_ip == os.getenv('ORIGINAL_IP', 'N/A') or current_ip == 'N/A':
@@ -180,7 +179,8 @@ def main():
     for input_url in input_urls:
         uris = fetch_trojan_uris_from_url(input_url)
         for i, uri in enumerate(uris):
-            config = parse_trojan_uri_to_config(uri)
+            port = find_free_port()  # Dapatkan port bebas
+            config = parse_trojan_uri_to_config(uri, port=port)
             if config:
                 if test_trojan_config(config, uri, len(valid_uris) + i):
                     valid_uris.append(uri)
