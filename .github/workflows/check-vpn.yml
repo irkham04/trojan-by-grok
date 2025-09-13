@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:  # Manual trigger
+  schedule:
+    - cron: '0 */6 * * *'  # Run setiap 6 jam
 
 jobs:
   vpn-check:
@@ -32,12 +34,12 @@ jobs:
           pip install -r requirements.txt || { echo "Failed to install Python dependencies"; exit 1; }
           echo "Python dependencies installed"
 
-      - name: Install Trojan-Go
+      - name: Install Xray
         run: |
-          wget https://github.com/p4gefau1t/trojan-go/releases/download/v0.10.6/trojan-go-linux-amd64.zip || { echo "Failed to download Trojan-Go"; exit 1; }
-          unzip trojan-go-linux-amd64.zip || { echo "Failed to unzip Trojan-Go"; exit 1; }
-          chmod +x trojan-go
-          echo "Trojan-Go installed: $(./trojan-go --version)"
+          wget https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip || { echo "Failed to download Xray"; exit 1; }
+          unzip Xray-linux-64.zip || { echo "Failed to unzip Xray"; exit 1; }
+          chmod +x xray
+          echo "Xray installed: $(./xray --version)"
 
       - name: Run VPN Check Script
         run: |
@@ -82,6 +84,6 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          pkill -f trojan-go || true
-          rm -f trojan-go* config_*.json
+          pkill -f xray || true
+          rm -f xray* config_*.json
           echo "Cleanup completed"
