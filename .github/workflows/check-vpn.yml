@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}  # Enable push
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -62,16 +64,15 @@ jobs:
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          # Stage semua file
-          git add .
-          git status  # Log untuk debug
-          git commit -m "Temporary commit for local changes" || echo "No local changes to commit"
-          # Pull dengan rebase
-          git pull --rebase origin main || { echo "Failed to pull and rebase"; exit 1; }
-          # Commit ulang
-          git add .
-          git commit -m "Update output.txt with valid Trojan/VMess URIs" || echo "No changes to commit after rebase"
-          git push || { echo "Failed to push to repo"; exit 1; }
+          git add output.txt vpn_report.txt  # Spesifik file, hindari all
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update output.txt with valid Trojan URIs"
+            # Pull rebase dengan auto-resolve (overwrite local changes)
+            git pull -X ours --rebase origin main || { echo "Rebase failed"; exit 1; }
+            git push origin main || { echo "Failed to push"; exit 1; }
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
