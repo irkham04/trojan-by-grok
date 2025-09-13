@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Script untuk cek kumpulan akun Trojan VPN dari input.txt.
-Fetch URL atau URI langsung, decode base64 ke Trojan URI, parse ke JSON config Xray, test, simpan valid ke output.txt.
+Script untuk cek kumpulan akun Trojan/VMess VPN dari input.txt.
+Fetch URL atau URI langsung, decode base64 ke URI, parse ke JSON config Xray, test, simpan valid ke output.txt.
+Support WS/TCP untuk Trojan, dan VMess basic.
 """
 import requests
 import base64
@@ -37,11 +38,11 @@ def check_socks_proxy(host="127.0.0.1", port=1080):
         print(f"SOCKS5 proxy {host}:{port} tidak aktif: {e}")
         return False
 
-def fetch_trojan_uris_from_url(input_url):
-    """Fetch file dari URL, decode setiap baris base64 ke Trojan URI."""
-    print(f"Fetching Trojan list dari: {input_url}")
+def fetch_uris_from_url(input_url):
+    """Fetch file dari URL, decode setiap baris base64 ke URI (support trojan/vmess)."""
+    print(f"Fetching dari: {input_url}")
     try:
-        response = requests.get(input_url, timeout=20)
+        response = requests.get(input_url, timeout=30)  # Timeout lebih panjang
         response.raise_for_status()
         lines = response.text.strip().split('\n')
         print(f"Total lines fetched: {len(lines)}")
@@ -52,31 +53,54 @@ def fetch_trojan_uris_from_url(input_url):
             if line:
                 try:
                     decoded = base64.b64decode(line).decode('utf-8', errors='ignore')
-                    if decoded.startswith('trojan://'):
+                    if decoded.startswith('trojan://') or decoded.startswith('vmess://'):
                         uris.append(decoded)
-                        print(f"Line {i+1}: Decoded URI: {decoded[:50]}...")
+                        protocol = 'Trojan' if decoded.startswith('trojan://') else 'VMess'
+                        print(f"Line {i+1}: {protocol} URI: {decoded[:50]}...")
                     else:
-                        print(f"Line {i+1}: Skip non-Trojan URI: {decoded[:50]}...")
+                        print(f"Line {i+1}: Skip non-supported: {decoded[:50]}...")
                 except Exception as e:
                     print(f"Line {i+1}: Skip invalid base64: {line[:50]}... ({e})")
         print(f"Total URIs fetched: {len(uris)}")
-        return uris[:20]  # Batasi 20 untuk debug
+        return uris[:50]  # Batasi 50 untuk lebih banyak test
     except Exception as e:
         print(f"Error fetching/parsing {input_url}: {e}")
         return []
 
 def parse_trojan_uri_to_config(uri, port=1080):
-    """Parse Trojan URI ke dict config untuk Xray."""
+    """Parse Trojan URI ke dict config untuk Xray, handle WS/TCP."""
     try:
         parsed = urlparse(uri)
         if parsed.scheme != 'trojan':
             print(f"Invalid scheme in URI: {uri[:50]}...")
             return None
-        password = parsed.username or ''
+        password = urllib.parse.unquote(parsed.username or '')
         server = parsed.hostname or ''
         port_remote = parsed.port or 443
         query = parse_qs(parsed.query)
         sni = query.get('sni', [server])[0]
+        network = query.get('type', ['tcp'])[0]  # 'ws' atau 'tcp'
+        ws_path = query.get('path', [''])[0]
+        ws_host = query.get('host', [sni])[0]
+        allow_insecure = query.get('allowInsecure', ['0'])[0] == '1'
+        
+        stream_settings = {
+            "network": network,
+            "security": "tls",
+            "tlsSettings": {
+                "serverName": sni,
+                "allowInsecure": allow_insecure
+            }
+        }
+        
+        if network == 'ws':
+            stream_settings["wsSettings"] = {
+                "path": urllib.parse.unquote(ws_path),
+                "headers": {"Host": ws_host}
+            }
+            print(f"Parsed WS config: network=ws, path={ws_path[:30]}..., host={ws_host}")
+        else:
+            print(f"Parsed TCP config: network=tcp")
         
         config = {
             "inbounds": [
@@ -86,7 +110,8 @@ def parse_trojan_uri_to_config(uri, port=1080):
                     "settings": {
                         "auth": "noauth",
                         "udp": True
-                    }
+                    },
+                    "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
                 }
             ],
             "outbounds": [
@@ -101,21 +126,72 @@ def parse_trojan_uri_to_config(uri, port=1080):
                             }
                         ]
                     },
-                    "streamSettings": {
-                        "network": "tcp",
-                        "security": "tls",
-                        "tlsSettings": {
-                            "serverName": sni,
-                            "allowInsecure": False
-                        }
-                    }
+                    "streamSettings": stream_settings
                 }
             ]
         }
-        print(f"Parsed config: server={server}, port={port_remote}, sni={sni}, local_port={port}")
+        print(f"Parsed config: server={server}, port={port_remote}, sni={sni}, local_port={port}, network={network}")
         return config
     except Exception as e:
         print(f"Error parsing URI {uri[:50]}...: {e}")
+        return None
+
+def parse_vmess_uri_to_config(uri, port=1080):
+    """Parse VMess URI ke dict config untuk Xray."""
+    try:
+        # VMess URI: vmess://base64(JSON)
+        vmess_b64 = uri[8:]  # Hilangkan 'vmess://'
+        vmess_json = json.loads(base64.b64decode(vmess_b64).decode('utf-8'))
+        server = vmess_json.get('add', '')
+        port_remote = vmess_json.get('port', 443)
+        uuid = vmess_json.get('id', '')
+        aid = vmess_json.get('aid', 0)
+        net = vmess_json.get('net', 'tcp')
+        tls = vmess_json.get('tls', '')
+        sni = vmess_json.get('host', server) if tls else ''
+        allow_insecure = vmess_json.get('allowInsecure', False)
+        
+        stream_settings = {
+            "network": net,
+            "security": tls,
+            "tlsSettings": {"serverName": sni, "allowInsecure": allow_insecure} if tls else {}
+        }
+        if net == 'ws':
+            # Handle WS untuk VMess jika ada path/host di JSON (extend jika perlu)
+            path = vmess_json.get('path', '')
+            host = vmess_json.get('host', sni)
+            if path:
+                stream_settings["wsSettings"] = {"path": path, "headers": {"Host": host}}
+        
+        config = {
+            "inbounds": [
+                {
+                    "port": port,
+                    "protocol": "socks",
+                    "settings": {"auth": "noauth", "udp": True},
+                    "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
+                }
+            ],
+            "outbounds": [
+                {
+                    "protocol": "vmess",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": server,
+                                "port": port_remote,
+                                "users": [{"id": uuid, "alterId": aid, "security": "auto"}]
+                            }
+                        ]
+                    },
+                    "streamSettings": stream_settings
+                }
+            ]
+        }
+        print(f"Parsed VMess: server={server}:{port_remote}, sni={sni}, local_port={port}, network={net}")
+        return config
+    except Exception as e:
+        print(f"Error parsing VMess {uri[:50]}...: {e}")
         return None
 
 def get_public_ip(proxy=None):
@@ -123,7 +199,7 @@ def get_public_ip(proxy=None):
     print(f"Getting IP with proxy: {proxy if proxy else 'None'}")
     try:
         proxies = {'http': proxy, 'https': proxy} if proxy else None
-        response = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=20)
+        response = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=30)
         ip = response.json()['ip']
         print(f"Got IP: {ip}")
         return ip
@@ -131,10 +207,10 @@ def get_public_ip(proxy=None):
         print(f"Error getting IP: {e}")
         return "N/A"
 
-def test_trojan_config(config, uri, index):
-    """Test satu config Trojan dengan Xray, return True jika valid."""
-    server = config['outbounds'][0]['settings']['servers'][0]['address']
-    port = config['outbounds'][0]['settings']['servers'][0]['port']
+def test_config(config, uri, index):
+    """Test satu config (Trojan/VMess) dengan Xray, return True jika valid."""
+    server = config['outbounds'][0]['settings']['servers'][0]['address'] if 'servers' in config['outbounds'][0]['settings'] else config['outbounds'][0]['settings']['vnext'][0]['address']
+    port = config['outbounds'][0]['settings']['servers'][0]['port'] if 'servers' in config['outbounds'][0]['settings'] else config['outbounds'][0]['settings']['vnext'][0]['port']
     local_port = config['inbounds'][0]['port']
     
     print(f"\n=== Testing Akun {index+1}: {server}:{port} ===")
@@ -142,7 +218,7 @@ def test_trojan_config(config, uri, index):
     # Simpan config sementara
     config_file = f'config_{index}.json'
     with open(config_file, 'w') as f:
-        json.dump(config, f)
+        json.dump(config, f, indent=2)
     
     proc = None
     try:
@@ -150,7 +226,7 @@ def test_trojan_config(config, uri, index):
         proc = subprocess.Popen(['./xray', '-config', config_file], 
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
                                text=True, preexec_fn=os.setsid)
-        time.sleep(15)  # Tunggu lebih lama untuk koneksi
+        time.sleep(20)  # Tunggu lebih lama untuk koneksi WS/TLS
         
         # Cek apakah Xray running
         if proc.poll() is not None:
@@ -185,7 +261,7 @@ def test_trojan_config(config, uri, index):
             os.remove(config_file)
 
 def main():
-    print(f"=== Trojan VPN Checker - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+    print(f"=== VPN Checker (Trojan/VMess) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     
     # Ambil original IP
     original_ip = get_public_ip()
@@ -206,16 +282,21 @@ def main():
     
     valid_uris = []
     for line in input_lines:
-        if line.startswith('trojan://'):
+        if line.startswith('trojan://') or line.startswith('vmess://'):
             uris = [line]
             print(f"Processing direct URI: {line[:50]}...")
         else:
-            uris = fetch_trojan_uris_from_url(line)
+            uris = fetch_uris_from_url(line)
         for i, uri in enumerate(uris):
             port = find_free_port()  # Dapatkan port bebas
-            config = parse_trojan_uri_to_config(uri, port=port)
+            if uri.startswith('trojan://'):
+                config = parse_trojan_uri_to_config(uri, port=port)
+            elif uri.startswith('vmess://'):
+                config = parse_vmess_uri_to_config(uri, port=port)
+            else:
+                continue
             if config:
-                if test_trojan_config(config, uri, len(valid_uris) + i):
+                if test_config(config, uri, len(valid_uris) + i):
                     valid_uris.append(uri)
     
     # Simpan output
