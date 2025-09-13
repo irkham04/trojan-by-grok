@@ -58,9 +58,14 @@ jobs:
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git pull --rebase origin main || { echo "Failed to pull and rebase"; exit 1; }
+          # Stage dan commit perubahan lokal dulu
           git add output.txt vpn_report.txt
-          git commit -m "Update output.txt with valid Trojan URIs" || echo "No changes to commit"
+          git commit -m "Temporary commit for local changes" || echo "No local changes to commit"
+          # Pull dengan rebase
+          git pull --rebase origin main || { echo "Failed to pull and rebase"; exit 1; }
+          # Commit ulang jika ada perubahan setelah rebase
+          git add output.txt vpn_report.txt
+          git commit -m "Update output.txt with valid Trojan URIs" || echo "No changes to commit after rebase"
           git push || { echo "Failed to push to repo"; exit 1; }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
