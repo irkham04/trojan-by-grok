@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Script untuk cek kumpulan akun Trojan VPN dari input.txt.
-Fetch URL, decode base64 ke Trojan URI, parse ke JSON config, test, simpan valid ke output.txt.
+Fetch URL atau URI langsung, decode base64 ke Trojan URI, parse ke JSON config Xray, test, simpan valid ke output.txt.
 """
 import requests
 import base64
@@ -56,7 +56,7 @@ def fetch_trojan_uris_from_url(input_url):
         return []
 
 def parse_trojan_uri_to_config(uri, port=1080):
-    """Parse Trojan URI ke dict config untuk Trojan-Go."""
+    """Parse Trojan URI ke dict config untuk Xray."""
     try:
         parsed = urlparse(uri)
         if parsed.scheme != 'trojan':
@@ -69,16 +69,38 @@ def parse_trojan_uri_to_config(uri, port=1080):
         sni = query.get('sni', [server])[0]
         
         config = {
-            "run_type": "client",
-            "local_addr": "127.0.0.1",
-            "local_port": port,
-            "remote_addr": server,
-            "remote_port": port_remote,
-            "password": [password],
-            "ssl": {
-                "sni": sni,
-                "verify": True
-            }
+            "inbounds": [
+                {
+                    "port": port,
+                    "protocol": "socks",
+                    "settings": {
+                        "auth": "noauth",
+                        "udp": True
+                    }
+                }
+            ],
+            "outbounds": [
+                {
+                    "protocol": "trojan",
+                    "settings": {
+                        "servers": [
+                            {
+                                "address": server,
+                                "port": port_remote,
+                                "password": password
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "tcp",
+                        "security": "tls",
+                        "tlsSettings": {
+                            "serverName": sni,
+                            "allowInsecure": False
+                        }
+                    }
+                }
+            ]
         }
         print(f"Parsed config: server={server}, port={port_remote}, sni={sni}, local_port={port}")
         return config
@@ -100,10 +122,10 @@ def get_public_ip(proxy=None):
         return "N/A"
 
 def test_trojan_config(config, uri, index):
-    """Test satu config Trojan, return True jika valid."""
-    server = config.get('remote_addr', 'N/A')
-    port = config.get('remote_port', 'N/A')
-    local_port = config.get('local_port', 1080)
+    """Test satu config Trojan dengan Xray, return True jika valid."""
+    server = config['outbounds'][0]['settings']['servers'][0]['address']
+    port = config['outbounds'][0]['settings']['servers'][0]['port']
+    local_port = config['inbounds'][0]['port']
     
     print(f"\n=== Testing Akun {index+1}: {server}:{port} ===")
     
@@ -114,16 +136,16 @@ def test_trojan_config(config, uri, index):
     
     proc = None
     try:
-        # Jalankan Trojan-Go di background tanpa config check
-        proc = subprocess.Popen(['./trojan-go', '-config', config_file], 
+        # Jalankan Xray di background
+        proc = subprocess.Popen(['./xray', '-config', config_file], 
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
                                text=True, preexec_fn=os.setsid)
-        time.sleep(15)  # Tunggu lebih lama
+        time.sleep(15)  # Tunggu lebih lama untuk koneksi
         
         # Cek apakah running
         if proc.poll() is not None:
             _, stderr = proc.communicate()
-            print(f"Trojan-Go failed to start: {stderr}")
+            print(f"Xray failed to start: {stderr}")
             return False
         
         # Set proxy
@@ -138,7 +160,7 @@ def test_trojan_config(config, uri, index):
         return True
     
     except Exception as e:
-        print(f"Error testing Trojan: {e}")
+        print(f"Error testing Xray: {e}")
         return False
     finally:
         if proc:
@@ -158,18 +180,22 @@ def main():
     # Baca input.txt
     try:
         with open('input.txt', 'r') as f:
-            input_urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            input_lines = [line.strip() for line in f if line.strip() and not line.startswith('#')]
     except FileNotFoundError:
         print("Error: input.txt tidak ditemukan.")
         return
     
-    if not input_urls:
+    if not input_lines:
         print("Error: input.txt kosong.")
         return
     
     valid_uris = []
-    for input_url in input_urls:
-        uris = fetch_trojan_uris_from_url(input_url)
+    for line in input_lines:
+        if line.startswith('trojan://'):
+            uris = [line]
+            print(f"Processing direct URI: {line[:50]}...")
+        else:
+            uris = fetch_trojan_uris_from_url(line)
         for i, uri in enumerate(uris):
             port = find_free_port()  # Dapatkan port bebas
             config = parse_trojan_uri_to_config(uri, port=port)
