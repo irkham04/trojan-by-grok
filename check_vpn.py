@@ -31,9 +31,11 @@ def fetch_trojan_uris_from_url(input_url):
     """Fetch file dari URL, decode setiap baris base64 ke Trojan URI."""
     print(f"Fetching Trojan list dari: {input_url}")
     try:
-        response = requests.get(input_url, timeout=15)
+        response = requests.get(input_url, timeout=20)
         response.raise_for_status()
         lines = response.text.strip().split('\n')
+        print(f"Total lines fetched: {len(lines)}")
+        print(f"First 5 lines (raw): {lines[:5]}")
         uris = []
         for i, line in enumerate(lines):
             line = line.strip()
@@ -46,7 +48,7 @@ def fetch_trojan_uris_from_url(input_url):
                     else:
                         print(f"Line {i+1}: Skip non-Trojan URI: {decoded[:50]}...")
                 except Exception as e:
-                    print(f"Line {i+1}: Skip invalid base64: {e}")
+                    print(f"Line {i+1}: Skip invalid base64: {line[:50]}... ({e})")
         print(f"Total URIs fetched: {len(uris)}")
         return uris[:20]  # Batasi 20 untuk debug
     except Exception as e:
@@ -89,7 +91,7 @@ def get_public_ip(proxy=None):
     print(f"Getting IP with proxy: {proxy if proxy else 'None'}")
     try:
         proxies = {'http': proxy, 'https': proxy} if proxy else None
-        response = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=15)
+        response = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=20)
         ip = response.json()['ip']
         print(f"Got IP: {ip}")
         return ip
@@ -112,18 +114,11 @@ def test_trojan_config(config, uri, index):
     
     proc = None
     try:
-        # Cek config dulu
-        result = subprocess.run(['./trojan-go', '-config', config_file], 
-                               capture_output=True, text=True, timeout=15)
-        if result.returncode != 0:
-            print(f"Config check failed: {result.stderr}")
-            return False
-        
-        # Jalankan Trojan-Go di background
+        # Jalankan Trojan-Go di background tanpa config check
         proc = subprocess.Popen(['./trojan-go', '-config', config_file], 
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
                                text=True, preexec_fn=os.setsid)
-        time.sleep(10)  # Tunggu lebih lama
+        time.sleep(15)  # Tunggu lebih lama
         
         # Cek apakah running
         if proc.poll() is not None:
@@ -142,9 +137,6 @@ def test_trojan_config(config, uri, index):
         print("✅ IP berubah. Akun valid!")
         return True
     
-    except subprocess.TimeoutExpired:
-        print("Trojan-Go timeout during config check.")
-        return False
     except Exception as e:
         print(f"Error testing Trojan: {e}")
         return False
