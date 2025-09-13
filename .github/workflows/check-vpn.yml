@@ -37,7 +37,7 @@ jobs:
       - name: Install Xray
         run: |
           rm -f *.zip *.dat *.md LICENSE xray  # Bersihkan file lama
-          wget https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip || { echo "Failed to download Xray"; exit 1; }
+          wget https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-64.zip || { echo "Failed to download Xray"; exit 1; }
           unzip -o Xray-linux-64.zip || { echo "Failed to unzip Xray"; exit 1; }
           chmod +x xray
           ls -l  # Log isi direktori
@@ -56,7 +56,7 @@ jobs:
           echo "Check completed"
           # Log output preview
           echo "Valid URIs preview:"
-          head -5 output.txt || echo "No valid URIs"
+          head -10 output.txt || echo "No valid URIs"
 
       - name: Commit output.txt to repo
         run: |
@@ -70,7 +70,7 @@ jobs:
           git pull --rebase origin main || { echo "Failed to pull and rebase"; exit 1; }
           # Commit ulang
           git add .
-          git commit -m "Update output.txt with valid Trojan URIs" || echo "No changes to commit after rebase"
+          git commit -m "Update output.txt with valid Trojan/VMess URIs" || echo "No changes to commit after rebase"
           git push || { echo "Failed to push to repo"; exit 1; }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
