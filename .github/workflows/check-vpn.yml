@@ -36,9 +36,11 @@ jobs:
 
       - name: Install Xray
         run: |
+          rm -f *.zip *.dat *.md LICENSE xray  # Bersihkan file lama
           wget https://github.com/XTLS/Xray-core/releases/download/v1.8.23/Xray-linux-64.zip || { echo "Failed to download Xray"; exit 1; }
-          unzip Xray-linux-64.zip || { echo "Failed to unzip Xray"; exit 1; }
+          unzip -o Xray-linux-64.zip || { echo "Failed to unzip Xray"; exit 1; }
           chmod +x xray
+          ls -l  # Log isi direktori
           echo "Xray installed: $(./xray --version)"
 
       - name: Run VPN Check Script
@@ -85,5 +87,5 @@ jobs:
         if: always()
         run: |
           pkill -f xray || true
-          rm -f xray* config_*.json
+          rm -f xray* *.dat *.md LICENSE config_*.json
           echo "Cleanup completed"
