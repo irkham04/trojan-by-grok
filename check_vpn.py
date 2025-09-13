@@ -27,6 +27,16 @@ def find_free_port(start_port=1080):
                 if port > start_port + 100:
                     raise Exception("Tidak bisa menemukan port bebas.")
 
+def check_socks_proxy(host="127.0.0.1", port=1080):
+    """Cek apakah proxy SOCKS5 aktif."""
+    try:
+        with socket.create_connection((host, port), timeout=5):
+            print(f"SOCKS5 proxy {host}:{port} aktif.")
+            return True
+    except Exception as e:
+        print(f"SOCKS5 proxy {host}:{port} tidak aktif: {e}")
+        return False
+
 def fetch_trojan_uris_from_url(input_url):
     """Fetch file dari URL, decode setiap baris base64 ke Trojan URI."""
     print(f"Fetching Trojan list dari: {input_url}")
@@ -41,7 +51,7 @@ def fetch_trojan_uris_from_url(input_url):
             line = line.strip()
             if line:
                 try:
-                    decoded = base64.b64decode(line).decode('utf-8')
+                    decoded = base64.b64decode(line).decode('utf-8', errors='ignore')
                     if decoded.startswith('trojan://'):
                         uris.append(decoded)
                         print(f"Line {i+1}: Decoded URI: {decoded[:50]}...")
@@ -142,10 +152,15 @@ def test_trojan_config(config, uri, index):
                                text=True, preexec_fn=os.setsid)
         time.sleep(15)  # Tunggu lebih lama untuk koneksi
         
-        # Cek apakah running
+        # Cek apakah Xray running
         if proc.poll() is not None:
             _, stderr = proc.communicate()
             print(f"Xray failed to start: {stderr}")
+            return False
+        
+        # Cek proxy SOCKS5
+        if not check_socks_proxy("127.0.0.1", local_port):
+            print("Proxy SOCKS5 tidak aktif, skip akun.")
             return False
         
         # Set proxy
